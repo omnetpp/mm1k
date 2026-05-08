@@ -1,0 +1,5 @@
+*.so
+*.log
+out
+results
+tests/work

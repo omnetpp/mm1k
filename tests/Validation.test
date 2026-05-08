@@ -1,0 +1,168 @@
+%description:
+Validates the M/M/1/K simulation against analytical results.
+Parameters: lambda=0.8, mu=1.0, K=5.
+Checks drop probability, utilization, E[N], and E[T] are within 5% of
+the closed-form M/M/1/K steady-state values.
+
+%file: package.ned
+// default package
+
+%file: ValidationNetwork.ned
+import Network;
+
+simple Validator
+{
+    parameters:
+        double lambda;
+        double mu;
+        int K;
+        double tolerance;
+}
+
+network ValidationNetwork extends Network
+{
+    submodules:
+        validator: Validator {
+            lambda = parent.lambda;
+            mu = parent.mu;
+            K = parent.K;
+            tolerance = 0.05;
+        }
+}
+
+%file: Validator.cc
+#include <omnetpp.h>
+#include <cmath>
+using namespace omnetpp;
+
+class Validator : public cSimpleModule, public cListener
+{
+    long numDropped = 0;
+    double busyTime = 0;
+    simtime_t lastBusyChange = 0;
+    bool lastBusyState = false;
+    double qlenWeighted = 0;
+    simtime_t lastQlenChange = 0;
+    long lastQlen = 0;
+    double sojournSum = 0;
+    long sojournCount = 0;
+
+  protected:
+    using cListener::finish;
+    void initialize() override;
+    void finish() override;
+    bool check(const char *name, double analytical, double simulated, double tol);
+  public:
+    using cListener::receiveSignal;
+    void receiveSignal(cComponent *src, simsignal_t id, long l, cObject *details) override;
+    void receiveSignal(cComponent *src, simsignal_t id, bool b, cObject *details) override;
+    void receiveSignal(cComponent *src, simsignal_t id, const SimTime &t, cObject *details) override;
+};
+Define_Module(Validator);
+
+void Validator::initialize()
+{
+    cModule *queue = getParentModule()->getSubmodule("queue");
+    cModule *sink = getParentModule()->getSubmodule("sink");
+    queue->subscribe("dropped", this);
+    queue->subscribe("busy", this);
+    queue->subscribe("queueLength", this);
+    sink->subscribe("lifeTime", this);
+}
+
+void Validator::receiveSignal(cComponent *, simsignal_t id, long l, cObject *)
+{
+    std::string name = cComponent::getSignalName(id);
+    if (name == "dropped") {
+        numDropped++;
+    } else if (name == "queueLength") {
+        simtime_t now = simTime();
+        qlenWeighted += lastQlen * (now - lastQlenChange).dbl();
+        lastQlenChange = now;
+        lastQlen = l;
+    }
+}
+
+void Validator::receiveSignal(cComponent *, simsignal_t id, bool b, cObject *)
+{
+    simtime_t now = simTime();
+    if (lastBusyState)
+        busyTime += (now - lastBusyChange).dbl();
+    lastBusyChange = now;
+    lastBusyState = b;
+}
+
+void Validator::receiveSignal(cComponent *, simsignal_t id, const SimTime &t, cObject *)
+{
+    sojournSum += t.dbl();
+    sojournCount++;
+}
+
+void Validator::finish()
+{
+    double lambda = par("lambda");
+    double mu = par("mu");
+    int K = par("K");
+    double tol = par("tolerance");
+    double rho = lambda / mu;
+
+    // Finalize time-weighted stats
+    double T = simTime().dbl();
+    if (lastBusyState)
+        busyTime += (simTime() - lastBusyChange).dbl();
+    qlenWeighted += lastQlen * (simTime() - lastQlenChange).dbl();
+
+    // Analytical M/M/1/K
+    double pi0 = (1.0 - rho) / (1.0 - pow(rho, K + 1));
+    double piK = pi0 * pow(rho, K);
+    double Pdrop = piK;
+    double throughput_a = lambda * (1.0 - Pdrop);
+    double utilization_a = 1.0 - pi0;
+    double EN_a = 0;
+    for (int n = 0; n <= K; n++)
+        EN_a += n * pi0 * pow(rho, n);
+    double ET_a = EN_a / throughput_a;
+
+    // Simulated values
+    long numArrived = numDropped + sojournCount;  // drops + completed (ignoring few in-flight)
+    double sim_Pdrop = (double)numDropped / numArrived;
+    double sim_util = busyTime / T;
+    double sim_EN = qlenWeighted / T;
+    double sim_ET = sojournSum / sojournCount;
+    double sim_throughput = (double)sojournCount / T;
+
+    EV << "=== M/M/1/K Validation ===" << endl;
+    bool allPass = true;
+    allPass &= check("Pdrop", Pdrop, sim_Pdrop, tol);
+    allPass &= check("throughput", throughput_a, sim_throughput, tol);
+    allPass &= check("utilization", utilization_a, sim_util, tol);
+    allPass &= check("E[N]", EN_a, sim_EN, tol);
+    allPass &= check("E[T]", ET_a, sim_ET, tol);
+
+    if (allPass)
+        EV << "VALIDATION PASS" << endl;
+    else
+        EV << "VALIDATION FAIL" << endl;
+}
+
+bool Validator::check(const char *name, double analytical, double simulated, double tol)
+{
+    double relErr = std::abs(simulated - analytical) / analytical;
+    bool ok = relErr <= tol;
+    EV << (ok ? "PASS" : "FAIL") << " " << name
+       << ": analytical=" << analytical
+       << " simulated=" << simulated
+       << " relErr=" << relErr * 100 << "%" << endl;
+    return ok;
+}
+
+%inifile: omnetpp.ini
+[General]
+network = ValidationNetwork
+sim-time-limit = 200000s
+ValidationNetwork.lambda = 0.8
+ValidationNetwork.mu = 1.0
+ValidationNetwork.K = 5
+
+%contains: stdout
+VALIDATION PASS

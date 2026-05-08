@@ -1,0 +1,12 @@
+SimulationProject(
+    name="mm1k",
+    root_folder=".",
+    github_owner="levy",
+    github_repository="mm1k",
+    omnetpp_project="omnetpp",
+    dynamic_libraries=["mm1k"],
+    library_folder=".",
+    ned_folders=["src"],
+    ini_file_folders=["examples"],
+    cpp_folders=["src"],
+)
