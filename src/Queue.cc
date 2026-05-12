@@ -44,7 +44,7 @@ void Queue::handleMessage(cMessage *msg)
     }
     else {
         // Arriving job
-        if (getSystemCount() >= capacity) {
+        if (getSystemCount() > capacity) {
             numDropped++;
             emit(droppedSignal, 1L);
             delete msg;
